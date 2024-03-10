@@ -308,7 +308,7 @@ def blur_level(
     Args:
         img (np.ndarray): The grayscale image whose blur levels we compute.
         mask (np.ndarray | None): The mask that defines which values are used for the
-            blur level computation.Defaults to None. If None, every value is used.
+            blur level computation. Defaults to None. If None, every value is used.
         size (int, optional): Odd integer. Size of the filter square footprint.
             Defaults to 5.
 
@@ -339,7 +339,7 @@ def no_blur_sobel_mask(
 ):
     """Compute sobel_based_mask and extend it to blurry regions of its complement.
 
-        The arguments that do not start by blur are passed to sobel_based_mask.
+        The arguments that do not start by 'blur' are passed to sobel_based_mask.
         The resulting mask is then treated as follows.
         blur levels of img are computed outside mask in square footprints of
         size blur_footprint_size using the standard deviation of intensity.
@@ -391,3 +391,96 @@ def sobel_segmentation(
         1 - mask, ignored_radius=ignored_radius, cell_radius=cell_radius
     )
     return labels
+
+
+# shape considerations
+
+def line_in_shape(shape,line_eq):
+    """Give pixels of shape that belong to line_eq
+
+    Args:
+        shape (np.ndarray): binary  image
+        line_eq (tuple[float,float,float]): triple (a,b,c) defining the line
+            as a x i + b x j = c (i for row, j for column)
+    """
+    a,b,c=line_eq
+
+    if b==0:
+        if a<0:
+            a,c=-a,-c
+        locus=np.zeros(shape.shape,dtype='bool')
+        locus[c//a]=1
+
+    if b<0:
+        a,b,c=-a,-b,-c
+    
+    if b>0:
+        indices=np.indices(shape.shape)
+        i=indices[0,:,:]
+        j=indices[1,:,:]
+
+        if a>0:
+            diff=c-(a*i+b*j)
+            locus=(diff<(a+b))*(diff>=0)
+
+        if a<0:
+            diff=c-(a*(i+1)+b*j)
+            locus=(diff<(b-a))*(diff>=0)
+        
+    if a==0:
+        locus=np.zeros(shape.shape,dtype='bool')
+        locus[:,c//b]=1
+
+    return locus*shape
+
+@njit(parallel=True)
+def max_dist(shape,center):
+    indices=np.indices(shape.shape)
+    i=indices[0,:,:]
+    j=indices[1,:,:]
+    distances=(i-center[0])**2+(j-center[1])**2
+    distances=distances*shape
+    return (np.amax(distances))**.5
+
+
+
+def shape_dims(shape):
+    m=skimage.measure.moments(shape,order=1)
+    center=m[1,0]/m[0,0],m[0,1]/m[0,0]
+    M=skimage.measure.moments_central(shape,order=2)
+    if M[0,2]==M[2,0]:
+        slope_0=0
+    else:
+        axis_theta_0=1/2*np.arctan(2*M[1,1]/(M[2,0]-M[0,2]))
+        slope=np.tan(axis_theta_0)
+
+    line_eq_0=(slope,1,slope*center[0]+center[1])
+    line_eq_1=(1,-slope,center[0]-slope*center[1])
+
+    locus_0=line_in_shape(shape,line_eq_0)
+    locus_1=line_in_shape(shape,line_eq_1)
+
+    dims=[max_dist(locus_0,center),max_dist(locus_1,center)]
+    dims.sort()
+
+    return dims
+
+def eccentricity(shape):
+    """ Return eccentricity of shape as defined in Burge-Burger 
+
+    Args:
+        shape (np.ndarray): binary image
+
+    Raises:
+        ValueError: 'empty shape' 
+
+    Returns:
+        float : the eccentricty of the shape, a^2/b^2 if the shape is an
+            ellipse (x/a)^2+(y/b)^2 = 1 with a>=b.
+    """
+    height,width=shape_dims(shape)
+    if width==0:
+        raise ValueError('shape is empty')
+    return (height/width)**2
+
+
